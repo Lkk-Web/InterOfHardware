@@ -4,6 +4,9 @@ import sys
 import os
 import signal
 from loguru import logger
+# 添加Flask相关导入
+from flask import Flask, jsonify
+import threading
 
 class IND245_WeighingScale:
     def __init__(self, port, baudrate=9600, timeout=2, max_retries=5):
@@ -12,6 +15,8 @@ class IND245_WeighingScale:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
+        # 添加一个变量存储最新的重量数据
+        self.latest_weight = (None, "未初始化")
         self._release_port()
         self.connect()
 
@@ -107,7 +112,10 @@ class IND245_WeighingScale:
             # 找出出现次数最多的串
             most_common = counter.most_common(1)[0][0]
             weight = float(most_common)
-            return (weight * 0.1, 'kg')
+            result = (weight * 0.1, 'kg')
+            # 更新最新的重量数据
+            self.latest_weight = result
+            return result
             
         except serial.SerialTimeoutException:
             error_msg = "串口通信超时"
@@ -131,7 +139,46 @@ class IND245_WeighingScale:
             logger.info("串口已关闭")
             print("串口已关闭")
 
+# 创建Flask应用
+app = Flask(__name__)
+
+# 全局变量存储称重仪实例
+scale_instance = None
+
+@app.route('/weight', methods=['GET'])
+def get_weight():
+    """API端点，返回当前重量数据"""
+    if scale_instance:
+        weight, unit = scale_instance.latest_weight
+        return jsonify({
+            'weight': weight,
+            'unit': unit,
+            'timestamp': time.time()
+        })
+    else:
+        return jsonify({
+            'error': '称重仪未初始化',
+            'timestamp': time.time()
+        }), 500
+
+def start_weight_reading(scale):
+    """后台线程函数，持续读取重量数据"""
+    try:
+        while True:
+            scale.get_weight()
+            time.sleep(0.5)  # 每0.5秒读取一次数据
+    except Exception as e:
+        logger.error(f"读取重量数据线程异常: {str(e)}")
+    finally:
+        scale.close()
+
+def start_http_server(host='0.0.0.0', port=5000):
+    """启动HTTP服务器"""
+    app.run(host=host, port=port, debug=False, use_reloader=False)
+
 def main():
+    global scale_instance
+    
     # 配置日志
     logger.remove()  # 移除默认的日志处理器
     logger.add(sys.stderr, level="INFO")  # 添加标准错误输出处理器
@@ -140,23 +187,27 @@ def main():
     # 配置参数
     PORT = 'COM1'  # 串口地址
     BAUDRATE = 9600  # 波特率
+    HTTP_HOST = '0.0.0.0'  # 监听所有网络接口
+    HTTP_PORT = 5000  # HTTP服务器端口
 
     print(f"正在连接串口 {PORT}...")
-    scale = IND245_WeighingScale(PORT, baudrate=BAUDRATE)
+    scale_instance = IND245_WeighingScale(PORT, baudrate=BAUDRATE)
     
     try:
-        print("开始读取重量数据...")
-        while True:
-            weight, unit = scale.get_weight()
-            if weight is not None:
-                print(f"当前重量: {weight}{unit}")
-            # time.sleep(0.1)  # 增加读取间隔
+        # 启动重量读取线程
+        weight_thread = threading.Thread(target=start_weight_reading, args=(scale_instance,), daemon=True)
+        weight_thread.start()
+        
+        # 启动HTTP服务器
+        print(f"启动HTTP服务器在 http://{HTTP_HOST}:{HTTP_PORT}/weight")
+        start_http_server(host=HTTP_HOST, port=HTTP_PORT)
             
     except KeyboardInterrupt:
         print("\n程序已停止")
         logger.info("\n用户终止操作")
     finally:
-        scale.close()
+        if scale_instance:
+            scale_instance.close()
 
 if __name__ == "__main__":
     main()
