@@ -165,7 +165,15 @@ def start_weight_reading(scale):
     """后台线程函数，持续读取重量数据"""
     try:
         while True:
-            scale.get_weight()
+            try:
+                scale.get_weight()
+            except Exception as e:
+                logger.error(f"读取重量数据异常: {str(e)}")
+                # 尝试重新连接
+                try:
+                    scale.connect()
+                except:
+                    pass
             time.sleep(0.5)  # 每0.5秒读取一次数据
     except Exception as e:
         logger.error(f"读取重量数据线程异常: {str(e)}")
@@ -182,7 +190,8 @@ def main():
     # 配置日志
     logger.remove()  # 移除默认的日志处理器
     logger.add(sys.stderr, level="INFO")  # 添加标准错误输出处理器
-    logger.add("weighing_scale.log", rotation="10 MB", level="DEBUG")
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weighing_scale.log")
+    logger.add(log_path, rotation="10 MB", level="DEBUG")
     
     # 配置参数
     PORT = 'COM1'  # 串口地址
@@ -190,6 +199,7 @@ def main():
     HTTP_HOST = '0.0.0.0'  # 监听所有网络接口
     HTTP_PORT = 5000  # HTTP服务器端口
 
+    logger.info("称重仪服务启动中...")
     print(f"正在连接串口 {PORT}...")
     scale_instance = IND245_WeighingScale(PORT, baudrate=BAUDRATE)
     
@@ -199,12 +209,15 @@ def main():
         weight_thread.start()
         
         # 启动HTTP服务器
+        logger.info(f"启动HTTP服务器在 http://{HTTP_HOST}:{HTTP_PORT}/weight")
         print(f"启动HTTP服务器在 http://{HTTP_HOST}:{HTTP_PORT}/weight")
         start_http_server(host=HTTP_HOST, port=HTTP_PORT)
             
     except KeyboardInterrupt:
         print("\n程序已停止")
-        logger.info("\n用户终止操作")
+        logger.info("用户终止操作")
+    except Exception as e:
+        logger.error(f"服务异常: {str(e)}")
     finally:
         if scale_instance:
             scale_instance.close()
