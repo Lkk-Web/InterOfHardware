@@ -1,0 +1,4 @@
+pyserial>=3.5
+pytz>=2023.3
+loguru>=0.7.0
+crcmod>=1.7
