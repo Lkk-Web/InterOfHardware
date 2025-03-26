@@ -220,6 +220,6 @@ def batch_print():
 
 if __name__ == "__main__":  
     # 启动Flask应用
-    app.run(host='0.0.0.0', port=5010, debug=False)
+    app.run(host='0.0.0.0', port=5012, debug=False)
     # 如果只想测试打印功能，可以注释上面的app.run()，取消注释下面的test_print()
     # test_print()
