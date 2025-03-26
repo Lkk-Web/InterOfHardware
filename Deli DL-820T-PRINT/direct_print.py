@@ -4,6 +4,26 @@ import win32con
 import time
 import qrcode
 from PIL import Image
+from flask import Flask, request, jsonify
+import logging
+
+# 创建Flask应用
+app = Flask(__name__)
+
+# 配置日志
+class CustomFormatter(logging.Formatter):
+    def format(self, record):
+        if "Running on" in record.getMessage():
+            return "="*50 + "\n标签打印服务已成功启动!\n" + \
+                   f"API地址: http://0.0.0.0:5010/print\n" + \
+                   "支持POST请求，请使用正确的参数格式\n" + "="*50
+        return super().format(record)
+
+# 应用自定义日志格式
+logger = logging.getLogger('werkzeug')
+handler = logging.StreamHandler()
+handler.setFormatter(CustomFormatter())
+logger.handlers = [handler]
 
 # 打印机名称
 PRINTER_NAME = 'Deli DL-820T(NEW)'
@@ -66,7 +86,9 @@ def print_label(text):
         
         # 生成二维码
         qr = qrcode.QRCode(version=1, box_size=2, border=1)
-        qr_data = f"批次:{lines[0].split(':')[1].strip()}"
+        # 修改二维码数据，使用JSON格式
+        package_info = lines[1].split('：')[1].strip() if len(lines) > 1 else ""
+        qr_data = f'{{"packageCode":"{package_info}"}}'  # 扫描后得出的数据，JSON格式
         qr.add_data(qr_data)
         qr.make(fit=True)
         qr_img = qr.make_image(fill_color="black", back_color="white")
@@ -107,9 +129,11 @@ def print_label(text):
         del dc
         win32print.ClosePrinter(hprinter)
         print("打印成功")
+        return True
             
     except Exception as e:
         print(f"打印出错: {str(e)}")
+        return False
 
 def test_print():
     """测试打印"""
@@ -125,5 +149,77 @@ def test_print():
     )
     print_label(product_label)
 
-if __name__ == "__main__":
-    test_print()
+@app.route('/print', methods=['POST'])
+def batch_print():
+    """接收POST请求进行批量打印
+    
+    参数:
+    - dto: 包含批次、品名、厂家、日期、车牌的字典
+    - start_package: 起始包号
+    - end_package: 结束包号
+    """
+    try:
+        data = request.json
+        
+        # 验证必要参数
+        if not data or 'dto' not in data or 'start_package' not in data or 'end_package' not in data:
+            return jsonify({'success': False, 'message': '缺少必要参数'}), 400
+        
+        dto = data['dto']
+        start_package = int(data['start_package'])
+        end_package = int(data['end_package'])
+        
+        # 验证DTO中的必要字段
+        required_fields = ['batch', 'product_name', 'manufacturer', 'date', 'license_plate']
+        for field in required_fields:
+            if field not in dto:
+                return jsonify({'success': False, 'message': f'DTO缺少{field}字段'}), 400
+        
+        # 验证包号范围
+        if start_package > end_package:
+            return jsonify({'success': False, 'message': '起始包号不能大于结束包号'}), 400
+        
+        # 批量打印
+        success_count = 0
+        failed_packages = []
+        
+        for package_num in range(start_package, end_package + 1):
+            # 构建标签文本
+            label_text = (
+                f'批次:{dto["batch"]}\n'
+                f'包号：{dto["batch"]}-{package_num}\n'
+                f'\n'
+                f'品名：{dto["product_name"]}\n'
+                f'厂家：{dto["manufacturer"]}\n'
+                f'日期：{dto["date"]}\n'
+                f'车牌：{dto["license_plate"]}\n'
+            )
+            
+            # 打印标签
+            if print_label(label_text):
+                success_count += 1
+            else:
+                failed_packages.append(package_num)
+            
+            # 打印间隔，避免打印机缓冲区溢出
+            time.sleep(0.5)
+        
+        # 返回结果
+        result = {
+            'success': True,
+            'total': end_package - start_package + 1,
+            'success_count': success_count,
+            'failed_count': len(failed_packages),
+            'failed_packages': failed_packages
+        }
+        
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+if __name__ == "__main__":  
+    # 启动Flask应用
+    app.run(host='0.0.0.0', port=5010, debug=False)
+    # 如果只想测试打印功能，可以注释上面的app.run()，取消注释下面的test_print()
+    # test_print()
