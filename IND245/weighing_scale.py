@@ -99,10 +99,15 @@ class IND245_WeighingScale:
             self.timeout = 1  # 调整超时设置为1秒
             # 读取返回数据
             response = self.ser.read_until()  # 使用readline替代read_all，并设置超时时间为1秒
-            # print(f"原始数据: {response}")
-            # 以\r\x02;0分隔原始数据
+             # print(f"原始数据: {response}")
+             # 以\r\x02;0分隔原始数据
             response = response.replace(b' ', b'')
+            # print(f"去空数据: {response}")
             response_list = [str(item, 'latin-1') for item in response.split(b'00\r\x02;0')]
+            # print(f"其他规则: {response_list}")
+            # 如果 response_list 长度为0，则使用 '05\r\x02;1' 进行分割
+            if len(response_list) == 1:
+                 response_list = [str(item, 'latin-1') for item in response.split(b'05\r\x02;1')]
             if response_list:
                 response_list = response_list[1:-1]
             print(f"分隔后的数据: {response_list}")
