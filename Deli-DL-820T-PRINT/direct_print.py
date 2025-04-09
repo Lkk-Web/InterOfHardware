@@ -15,7 +15,7 @@ class CustomFormatter(logging.Formatter):
     def format(self, record):
         if "Running on" in record.getMessage():
             return "="*50 + "\n标签打印服务已成功启动!\n" + \
-                   f"API地址: http://0.0.0.0:5010/print\n" + \
+                   f"API地址: http://0.0.0.0:5030/print\n" + \
                    "支持POST请求，请使用正确的参数格式\n" + "="*50
         return super().format(record)
 
@@ -27,22 +27,36 @@ logger.handlers = [handler]
 
 # 打印机名称
 PRINTER_NAME = 'Deli DL-820T(NEW)'
+# 添加一个标志，用于控制是否强制要求打印机存在
+REQUIRE_PRINTER = True  # 设置为False时，即使打印机不存在也不会报错
 
 def check_printer():
-    """检查打印机是否存在"""
-    printers = [printer[2] for printer in win32print.EnumPrinters(2)]
-    print("系统中的打印机列表：")
+    """检查打印机是否存在且已连接"""
+    # 获取所有打印机 - 修改为正确枚举打印机
+    printers = [printer[2] for printer in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+    
+    print("当前连接的打印机列表：")
     for p in printers:
         print(p)
     
     if PRINTER_NAME not in printers:
-        raise Exception(f"找不到打印机: {PRINTER_NAME}")
+        if REQUIRE_PRINTER:
+            raise Exception(f"找不到已连接的打印机: {PRINTER_NAME}")
+        else:
+            print(f"警告: 找不到已连接的打印机 {PRINTER_NAME}，但将继续运行服务")
+            print(f"请在需要打印时连接打印机")
+            return False
     return True
 
 def print_label(text):
     """使用Windows GDI打印"""
     try:
-        check_printer()
+        printer_available = check_printer()
+        if not printer_available and not REQUIRE_PRINTER:
+            print(f"模拟打印: {text[:50]}...")
+            return True  # 返回成功，但实际上没有打印
+        
+        # 以下是原有的打印逻辑
         hprinter = win32print.OpenPrinter(PRINTER_NAME)
         printer_info = win32print.GetPrinter(hprinter, 2)
         
@@ -159,6 +173,12 @@ def batch_print():
     - end_package: 结束包号
     """
     try:
+        # 首先检查打印机状态
+        try:
+            check_printer()
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'打印机检查失败: {str(e)}'}), 503
+            
         data = request.json
         
         # 验证必要参数
@@ -182,8 +202,11 @@ def batch_print():
         # 批量打印
         success_count = 0
         failed_packages = []
+        retry_count = 0
+        max_retries = 3
         
-        for package_num in range(start_package, end_package + 1):
+        package_num = start_package
+        while package_num <= end_package:
             # 构建标签文本
             label_text = (
                 f'批次:{dto["batch"]}\n'
@@ -195,14 +218,25 @@ def batch_print():
                 f'车牌：{dto["license_plate"]}\n'
             )
             
+            print(f"正在打印包号: {dto['batch']}-{package_num}...")
+            
             # 打印标签
             if print_label(label_text):
                 success_count += 1
+                package_num += 1  # 只有成功才递增包号
+                retry_count = 0   # 重置重试计数
+                # 增加打印间隔，避免打印机缓冲区溢出
+                time.sleep(1.5)   # 增加到1.5秒
             else:
-                failed_packages.append(package_num)
-            
-            # 打印间隔，避免打印机缓冲区溢出
-            time.sleep(0.5)
+                retry_count += 1
+                if retry_count >= max_retries:
+                    failed_packages.append(package_num)
+                    package_num += 1  # 达到最大重试次数后跳过当前包号
+                    retry_count = 0
+                    print(f"包号 {dto['batch']}-{package_num} 打印失败，已跳过")
+                else:
+                    print(f"包号 {dto['batch']}-{package_num} 打印失败，正在重试 ({retry_count}/{max_retries})...")
+                    time.sleep(2)  # 失败后等待更长时间再重试
         
         # 返回结果
         result = {
@@ -218,8 +252,8 @@ def batch_print():
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
-if __name__ == "__main__":  
+if __name__ == "__main__": 
+    app.run(host='0.0.0.0', port=5030, debug=False)
+    #test_print()
     # 启动Flask应用
-    app.run(host='0.0.0.0', port=5012, debug=False)
     # 如果只想测试打印功能，可以注释上面的app.run()，取消注释下面的test_print()
-    # test_print()
